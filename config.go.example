@@ -1,0 +1,8 @@
+package main
+
+const (
+    mqttServer      = "tcp://mqtt.example.org:1883"
+    mqttClientId    = "mirobot"
+    mqttUsername    = ""
+    mqttPassword    = ""
+)
