@@ -10,6 +10,7 @@ import (
     "os/exec"
     "os/signal"
     "syscall"
+    "time"
 
     "github.com/novag/gen1_room_controller/miio"
     "github.com/eclipse/paho.mqtt.golang"
@@ -29,6 +30,8 @@ type Coordinates struct {
     X int
     Y int
 }
+
+type Zones [][]int
 
 type RemoteHost struct {
     Address     string
@@ -78,7 +81,7 @@ func copyMapData(source string, destination string) error {
     return nil
 }
 
-func goTo(x int, y int) error {
+func restoreFullMap() error {
     var source = fullMapPath
     var destination = rockroboBasePath
 
@@ -88,6 +91,16 @@ func goTo(x int, y int) error {
 
     cmd := exec.Command("service", "rrwatchdoge", "reload")
     if err := cmd.Run(); err != nil {
+        return err
+    }
+
+    time.Sleep(30 * time.Second)
+
+    return nil
+}
+
+func gotoTarget(x int, y int) error {
+    if err := restoreFullMap(); err != nil {
         return err
     }
 
@@ -101,13 +114,44 @@ func goTo(x int, y int) error {
         return err
     }
 
-    vacuum.UpdateStatus()
+    vacuum.GotoTarget(x, y)
 
-    fmt.Println("Okay did it!")
-
-    // TODO: go to
+    fmt.Println("Going to the target point.")
 
     return nil
+}
+
+func zonedClean(zones Zones) error {
+    if err := restoreFullMap(); err != nil {
+        return err
+    }
+
+    token, err := getMiioToken()
+    if err != nil {
+        return err
+    }
+
+    vacuum, err := miio.NewVacuum("127.0.0.1", token)
+    if err != nil {
+        return err
+    }
+
+    vacuum.ZonedClean(zones)
+
+    fmt.Println("Starting zoned clean.")
+
+    return nil
+}
+
+var saveMapMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+    var source = rockroboBasePath
+    var destination = roomControllerBasePath + string(message.Payload()) + "/"
+
+    if err := copyMapData(source, destination); err != nil {
+        client.Publish(message.Topic() + "/status", 0, false, err.Error())
+    } else {
+        client.Publish(message.Topic() + "/status", 0, false, "Success")
+    }
 }
 
 var cleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
@@ -139,18 +183,7 @@ var cleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
     client.Publish(message.Topic() + "/status", 0, false, "Success")
 }
 
-var initMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
-    var source = rockroboBasePath
-    var destination = roomControllerBasePath + string(message.Payload()) + "/"
-
-    if err := copyMapData(source, destination); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-    } else {
-        client.Publish(message.Topic() + "/status", 0, false, "Success")
-    }
-}
-
-var goToMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+var gotoTargetMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
     var coordinates Coordinates
 
     if err := json.Unmarshal(message.Payload(), &coordinates); err != nil {
@@ -158,7 +191,23 @@ var goToMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
         return
     }
 
-    if err := goTo(coordinates.X, coordinates.Y); err != nil {
+    if err := gotoTarget(coordinates.X, coordinates.Y); err != nil {
+        client.Publish(message.Topic() + "/status", 0, false, err.Error())
+        return
+    }
+
+    client.Publish(message.Topic() + "/status", 0, false, "Success")
+}
+
+var zonedCleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+    var zones Zones
+
+    if err := json.Unmarshal(message.Payload(), &zones); err != nil {
+        client.Publish(message.Topic() + "/status", 0, false, err.Error())
+        return
+    }
+
+    if err := zonedClean(zones); err != nil {
         client.Publish(message.Topic() + "/status", 0, false, err.Error())
         return
     }
@@ -229,15 +278,19 @@ func main() {
         panic(token.Error())
     }
 
+    if token := client.Subscribe("devices/vacuum/1/save_map", 0, saveMapMsgRcvd); token.Wait() && token.Error() != nil {
+        fmt.Println(token.Error())
+    }
+
     if token := client.Subscribe("devices/vacuum/1/clean", 0, cleanMsgRcvd); token.Wait() && token.Error() != nil {
         fmt.Println(token.Error())
     }
 
-    if token := client.Subscribe("devices/vacuum/1/init", 0, initMsgRcvd); token.Wait() && token.Error() != nil {
+    if token := client.Subscribe("devices/vacuum/1/goto_target", 0, gotoTargetMsgRcvd); token.Wait() && token.Error() != nil {
         fmt.Println(token.Error())
     }
 
-    if token := client.Subscribe("devices/vacuum/1/goto", 0, goToMsgRcvd); token.Wait() && token.Error() != nil {
+    if token := client.Subscribe("devices/vacuum/1/zoned_clean", 0, zonedCleanMsgRcvd); token.Wait() && token.Error() != nil {
         fmt.Println(token.Error())
     }
 

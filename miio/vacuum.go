@@ -7,13 +7,15 @@ import (
 
 // Commands
 const (
-    cmdGetStatus = "get_status"
-    cmdStart     = "app_start"
-    cmdStop      = "app_stop"
-    cmdPause     = "app_pause"
-    cmdDock      = "app_charge"
-    cmdFindMe    = "find_me"
-    cmdFanPower  = "set_custom_mode"
+    cmdGetStatus    = "get_status"
+    cmdStart        = "app_start"
+    cmdGotoTarget   = "app_goto_target"
+    cmdZonedClean   = "app_zoned_clean"
+    cmdStop         = "app_stop"
+    cmdPause        = "app_pause"
+    cmdDock         = "app_charge"
+    cmdFindMe       = "find_me"
+    cmdFanPower     = "set_custom_mode"
 )
 
 const (
@@ -232,6 +234,31 @@ func (v *Vacuum) UpdateStatus() bool {
 // StartCleaning starts the cleaning cycle.
 func (v *Vacuum) StartCleaning() bool {
     if !v.sendCommand(cmdStart, nil, false, vacRetries) {
+        return false
+    }
+
+    time.Sleep(1 * time.Second)
+    return v.UpdateStatus()
+}
+
+// GotoTarget goes to the given target coordinates.
+func (v *Vacuum) GotoTarget(x int, y int) bool {
+    if !v.sendCommand(cmdGotoTarget, []interface{}{x, y}, false, vacRetries) {
+        return false
+    }
+
+    time.Sleep(1 * time.Second)
+    return v.UpdateStatus()
+}
+
+// ZonedClean cleans the given zones n times.
+func (v *Vacuum) ZonedClean(zones [][]int) bool {
+    _zones := make([]interface{}, len(zones))
+    for index, zone := range zones {
+        _zones[index] = zone
+    }
+
+    if !v.sendCommand(cmdZonedClean, _zones, false, vacRetries) {
         return false
     }
 
