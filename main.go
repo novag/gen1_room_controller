@@ -267,13 +267,42 @@ var mqttMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
     client.Publish(message.Topic() + "/status", 0, false, string(jdata))
 }
 
+var pingMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+    fmt.Println("PING message received!")
+
+    token := client.Publish(message.Topic() + "/status", 0, false, "PONG")
+    if token.Wait() && token.Error() != nil {
+        panic(token.Error())
+    }
+}
+
+func onConnected(client mqtt.Client) {
+    if token := client.Subscribe("devices/vacuum/1/ping", 0, pingMsgRcvd); token.Wait() && token.Error() != nil {
+        fmt.Println(token.Error())
+    }
+
+    for topic := range subscriptions {
+        if token := client.Subscribe(topic, 0, mqttMsgRcvd); token.Wait() && token.Error() != nil {
+            fmt.Println(token.Error())
+        }
+    }
+}
+
 func main() {
     signalChannel := make(chan os.Signal, 1)
     signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
 
-    opts := mqtt.NewClientOptions().AddBroker(mqttServer)
+    opts := mqtt.NewClientOptions()
+    opts.SetAutoReconnect(true)
+    opts.SetCleanSession(true)
+    opts.SetConnectTimeout(0)
+    opts.SetMaxReconnectInterval(5 * time.Second)
+    opts.SetOnConnectHandler(onConnected)
+
+    opts.AddBroker(mqttServer)
     opts.SetClientID(mqttClientId)
-    opts.SetUsername(mqttUsername).SetPassword(mqttPassword)
+    opts.SetUsername(mqttUsername)
+    opts.SetPassword(mqttPassword)
 
     client := mqtt.NewClient(opts)
     if token := client.Connect(); token.Wait() && token.Error() != nil {
@@ -290,12 +319,6 @@ func main() {
     if err != nil {
         fmt.Println("Error: " + err.Error())
         return
-    }
-
-    for topic := range subscriptions {
-        if token := client.Subscribe(topic, 0, mqttMsgRcvd); token.Wait() && token.Error() != nil {
-            fmt.Println(token.Error())
-        }
     }
 
     <- signalChannel
