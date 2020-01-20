@@ -1,14 +1,18 @@
 package main
 
 import (
+    "crypto/md5"
     "encoding/hex"
     "encoding/json"
+    "errors"
     "fmt"
     "io"
     "io/ioutil"
     "os"
     "os/exec"
     "os/signal"
+    "strconv"
+    "sync"
     "syscall"
     "time"
 
@@ -20,10 +24,12 @@ const (
     miioTokenPath = "/mnt/data/miio/device.token"
     rockroboBasePath = "/mnt/data/rockrobo/"
     roomControllerBasePath = "/mnt/data/room_controller/"
-    fullMapPath = roomControllerBasePath + "full/"
+    baseMapPath = roomControllerBasePath + "full/"
     sshPrivateKeyPath = "/root/.ssh/id_ed25519"
     sshPublicKeyPath = "/root/.ssh/id_ed25519.pub"
     sshKnownHostsPath = "/root/.ssh/known_hosts"
+
+    statusUpdateTopic = "devices/vacuum/1/status"
 )
 
 var subscriptions = map[string]MqttMsgHandler{
@@ -58,6 +64,7 @@ type RemoteHost struct {
     FetchKey    bool
 }
 
+var copyMapMutex sync.Mutex
 var Vacuum *miio.Vacuum
 
 func getMiioToken() (string, error) {
@@ -71,42 +78,106 @@ func getMiioToken() (string, error) {
     return hex.EncodeToString(data), nil
 }
 
-func copyMapData(source string, destination string) error {
+func md5sum(filepath string) (string, error) {
+    var hash string
+
+    file, err := os.Open(filepath)
+    if err != nil {
+        return hash, err
+    }
+    defer file.Close()
+
+    h := md5.New()
+    if _, err := io.Copy(h, file); err != nil {
+        return hash, err
+    }
+
+    hash = hex.EncodeToString(h.Sum(nil))
+
+    return hash, nil
+}
+
+func checkDocked() error {
+    state := Vacuum.GetUpdateMessage().State.State
+
+    if state == miio.VacStateCharging || state == miio.VacStateFullyCharged {
+        return nil
+    }
+
+    return errors.New("Vacuum not docked! - State: " + strconv.Itoa(int(state)))
+}
+
+func copyMapData(source string, destination string) (bool, error) {
     fileFilter := []string{"last_map", "ChargerPos.data", "StartPos.data"}
+
+    // Only allow one call at a time
+    copyMapMutex.Lock()
+    defer copyMapMutex.Unlock()
+
+    if err := checkDocked(); err != nil {
+        return false, err
+    }
+
+    for index, file := range fileFilter {
+        sourceHash, err := md5sum(source + file)
+        if err != nil {
+            break
+        }
+
+        destinationHash, err := md5sum(destination + file)
+        if err != nil {
+            break
+        }
+
+        if sourceHash != destinationHash {
+            break
+        }
+
+        if index == len(fileFilter) - 1 {
+            return false, nil
+        }
+    }
 
     os.MkdirAll(destination, os.ModePerm)
 
     for _, file := range fileFilter {
         srcFile, err := os.Open(source + file)
         if err != nil {
-            return err
+            return false, err
         }
         defer srcFile.Close()
 
         os.Remove(destination + file)
         destFile, err := os.Create(destination + file)
         if err != nil {
-            return err
+            return false, err
         }
         defer destFile.Close()
 
         if _, err = io.Copy(destFile, srcFile); err != nil {
-            return err
+            return false, err
         }
 
         if err = destFile.Sync(); err != nil {
-            return err
+            return false, err
         }
     }
 
-    return nil
+    return true, nil
 }
 
-func restoreFullMap() error {
-    var source = fullMapPath
+func restoreBaseMap() error {
+    var source = baseMapPath
     var destination = rockroboBasePath
 
-    if err := copyMapData(source, destination); err != nil {
+    fmt.Println("Restoring base map!")
+
+    reload, err := copyMapData(source, destination)
+    if !reload {
+        if err == nil {
+            fmt.Println("Map has already been restored!")
+        }
+
         return err
     }
 
@@ -117,14 +188,12 @@ func restoreFullMap() error {
 
     time.Sleep(30 * time.Second)
 
+    fmt.Println("Map restored!")
+
     return nil
 }
 
 func gotoTarget(x int, y int) error {
-    if err := restoreFullMap(); err != nil {
-        return err
-    }
-
     Vacuum.GotoTarget(x, y)
 
     fmt.Println("Going to the target point.")
@@ -133,7 +202,7 @@ func gotoTarget(x int, y int) error {
 }
 
 func cleanRoom(zones RoomZones, idlePoint Coordinates) error {
-    if err := restoreFullMap(); err != nil {
+    if err := restoreBaseMap(); err != nil {
         return err
     }
 
@@ -148,7 +217,7 @@ var saveMapMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, er
     var source = rockroboBasePath
     var destination = roomControllerBasePath + string(message.Payload()) + "/"
 
-    if err := copyMapData(source, destination); err != nil {
+    if _, err := copyMapData(source, destination); err != nil {
         return nil, err
     }
 
@@ -276,6 +345,31 @@ var pingMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
     }
 }
 
+func statusUpdateLoop(client mqtt.Client) {
+    state := miio.VacStateUnknown
+
+    for {
+        Vacuum.UpdateStatus()
+        updateMessage := Vacuum.GetUpdateMessage()
+
+        if state != updateMessage.State.State {
+            client.Publish(statusUpdateTopic, 0, false, strconv.Itoa(int(state)))
+
+            if state != miio.VacStateCharging && state != miio.VacStateFullyCharged &&
+                    updateMessage.State.State == miio.VacStateCharging {
+                if err := restoreBaseMap(); err != nil {
+                    fmt.Printf("statusUpdateLoop: %s", err.Error())
+                }
+            }
+
+            state = updateMessage.State.State
+            fmt.Printf("New state: %d\n", state)
+        }
+
+        time.Sleep(2 * time.Second)
+    }
+}
+
 func onConnected(client mqtt.Client) {
     if token := client.Subscribe("devices/vacuum/1/ping", 0, pingMsgRcvd); token.Wait() && token.Error() != nil {
         fmt.Println(token.Error())
@@ -320,6 +414,8 @@ func main() {
         fmt.Println("Error: " + err.Error())
         return
     }
+
+    go statusUpdateLoop(client)
 
     <- signalChannel
 
