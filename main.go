@@ -210,6 +210,78 @@ func cleanRoom(zones RoomZones, idlePoint Coordinates) error {
 
     fmt.Println("Starting zoned clean.")
 
+    go func() {
+        returnCount := 0
+        lastState := miio.VacStateZoneClean
+
+        time.Sleep(30 * time.Second)
+
+        for {
+            state := (<-Vacuum.UpdateChan).State.State
+
+            // Done if charging
+            if state == miio.VacStateCharging {
+                fmt.Println("Charging. All done.")
+                return
+            }
+
+            if state == lastState {
+                continue
+            }
+
+            fmt.Printf("Processing state: %d\n", state)
+
+            switch state {
+            case miio.VacStateReturning:
+                // expect { miio.VacStateIdle }
+            case miio.VacStateIdle:
+                switch returnCount {
+                case 0:
+                    // Dock not found
+                    time.Sleep(5 * time.Second)
+
+                    gotoTarget(idlePoint[0], idlePoint[1])
+
+                    // expect { miio.VacStateGoTo }
+                case 1:
+                    // Waiting for docking command
+
+                    // expect { miio.VacStateReturning }
+                case 2:
+                    // First orientation drive
+                    Vacuum.Dock()
+                    Vacuum.SetVolume(0)
+
+                    // expect { miio.VacStateReturning }
+                case 3:
+                    // Second orientation drive
+                    Vacuum.Dock()
+
+                    // expect { miio.VacStateReturning }
+                case 4:
+                    // We should have updated our map, going home now
+                    Vacuum.Dock()
+                    Vacuum.SetVolume(100)
+
+                    // expect { miio.VacStateReturning }
+                case 5:
+                    // Let's try one last time
+                    Vacuum.Dock()
+
+                    // expect { miio.VacStateReturning }
+                default:
+                    return
+                }
+
+                returnCount++
+            case miio.VacStateGoTo:
+                // expect { miio.VacStateIdle }
+            }
+
+            lastState = state
+        }
+    }()
+
     return nil
 }
 
