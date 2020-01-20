@@ -2,6 +2,7 @@ package miio
 
 import (
     "encoding/json"
+    "fmt"
     "time"
 )
 
@@ -163,7 +164,7 @@ func (v *Vacuum) UpdateState() {
     r := &stateResponse{}
     err := json.Unmarshal(b.([]byte), r)
     if err != nil {
-        //LOGGER.Error("Failed to un-marshal vacuum response: %s", err.Error())
+        fmt.Printf("Error: Failed to un-marshal vacuum response: %s\n", err.Error())
         return
     }
 

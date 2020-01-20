@@ -95,7 +95,7 @@ func (d *XiaomiDevice) getFieldValue(field fldName) string {
     case reflect.String:
         return v.(string)
     default:
-        //LOGGER.Warn("Unknown %s value type %s", field, reflect.TypeOf(v).Kind().String())
+        fmt.Printf("Unknown %s value type %s\n", field, reflect.TypeOf(v).Kind().String())
         return ""
     }
 }
@@ -109,7 +109,7 @@ func (d *XiaomiDevice) GetFieldValueInt32(field fldName, curVal int32) int32 {
 
     n, err := strconv.Atoi(v)
     if err != nil {
-        //LOGGER.Warn("Failed to parse int: %s", v)
+        fmt.Printf("Failed to parse int: %s\n", v)
         return curVal
     }
     return int32(n)
@@ -124,7 +124,7 @@ func (d *XiaomiDevice) GetFieldValueUint32(field fldName, curVal uint32) uint32 
 
     n, err := strconv.ParseUint(v, 10, 32)
     if err != nil {
-        //LOGGER.Warn("Failed to parse uint32: %s", v)
+        fmt.Printf("Failed to parse uint32: %s\n", v)
         return curVal
     }
     return uint32(n)
@@ -139,7 +139,7 @@ func (d *XiaomiDevice) GetFieldValueFloat64(field fldName, curVal float64) float
 
     n, err := strconv.ParseFloat(v, 64)
     if err != nil {
-        //LOGGER.Warn("Failed to parse float64: %s", v)
+        fmt.Printf("Failed to parse float64: %s\n", v)
         return curVal
     }
     return n
@@ -212,13 +212,13 @@ func (d *XiaomiDevice) doCommand(cmd string, data []interface{}, storeResponse b
     }
     b, err := json.Marshal(c)
     if err != nil {
-        //LOGGER.Error("Failed to marshal %s command: %s", cmd, err.Error())
+        fmt.Printf("Error: Failed to marshal %s command: %s\n", cmd, err.Error())
         return false
     }
 
     p, err := d.crypto.NewPacket(b)
     if err != nil {
-        //LOGGER.Error("Failed to encrypt %s command: %s", cmd, err.Error())
+        fmt.Printf("Error: Failed to encrypt %s command: %s\n", cmd, err.Error())
         return false
     }
 
@@ -232,13 +232,13 @@ func (d *XiaomiDevice) discovery() bool {
         select {
         case b := <-d.conn.DeviceMessages:
             if 32 != len(b) {
-                //LOGGER.Error("Received incorrect discovery package")
+                fmt.Printf("Error: Received incorrect discovery package\n")
                 return false
             }
 
             p, err := packet.Decode(b, nil)
             if err != nil {
-                //LOGGER.Error("Failed to decode packet: %s", err.Error())
+                fmt.Printf("Error: Failed to decode packet: %s\n", err.Error())
                 return false
             }
 
@@ -246,7 +246,7 @@ func (d *XiaomiDevice) discovery() bool {
                 c, err := packet.NewCrypto(p.Header.DeviceID, d.tokenB,
                     p.Header.Stamp, time.Now().UTC(), clock.New())
                 if err != nil {
-                    //LOGGER.Error("Failed to create crypto: %s", err.Error())
+                    fmt.Printf("Error: Failed to create crypto: %s\n", err.Error())
                     return false
                 }
 
@@ -255,7 +255,7 @@ func (d *XiaomiDevice) discovery() bool {
 
             return true
         case <-time.After(5 * time.Second):
-            //LOGGER.Error("Timeout while waiting on handshake")
+            fmt.Printf("Error: Timeout while waiting on handshake\n")
             return false
         }
     }
@@ -271,19 +271,19 @@ func (d *XiaomiDevice) sendAndWait(p *packet.Packet, cmd string, storeResponse b
         case b := <-d.conn.DeviceMessages:
             p, err := packet.Decode(b, nil)
             if err != nil {
-                //LOGGER.Error("Failed to decode packet: %s", err.Error())
+                fmt.Printf("Error: Failed to decode packet: %s\n", err.Error())
                 return false
             }
 
             err = p.Verify(d.tokenB)
             if err != nil {
-                //LOGGER.Error("Failed to verify packet: %s", err.Error())
+                fmt.Printf("Error: Failed to verify packet: %s\n", err.Error())
                 continue
             }
 
             dec, err := d.crypto.Decrypt(p.Data)
             if err != nil {
-                //LOGGER.Error("Failed to decrypt packet: %s", err.Error())
+                fmt.Printf("Error: Failed to decrypt packet: %s\n", err.Error())
                 continue
             }
 
@@ -292,7 +292,7 @@ func (d *XiaomiDevice) sendAndWait(p *packet.Packet, cmd string, storeResponse b
             c := &devResponse{}
             err = json.Unmarshal(dec, c)
             if err != nil {
-                //LOGGER.Error("Failed to un-marshal response: %s", err.Error())
+                fmt.Printf("Error: Failed to un-marshal response: %s\n", err.Error())
                 continue
             }
 
@@ -305,7 +305,7 @@ func (d *XiaomiDevice) sendAndWait(p *packet.Packet, cmd string, storeResponse b
 
             return true
         case <-time.After(5 * time.Second):
-            //LOGGER.Error("Timeout while waiting on response fot %s", cmd)
+            fmt.Printf("Error: Timeout while waiting on response for %s\n", cmd)
             return false
         }
     }

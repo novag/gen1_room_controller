@@ -2,6 +2,7 @@ package miio
 
 import (
     "encoding/json"
+    "fmt"
     "net"
 )
 
@@ -85,12 +86,14 @@ func (c *connection) in() {
         default:
             size, _, err := c.conn.ReadFromUDP(buf)
             if err != nil {
-                //LOGGER.Error("Error reading from UDP: %s", err.Error())
+                fmt.Printf("Error: Error reading from UDP: %s\n", err.Error())
                 continue
             }
 
+            //fmt.Printf("Received msg: size=%d\n", size)
+
             if size > 0 {
-                //LOGGER.Debug("Received device message: %s", string(buf[0:size]))
+                //fmt.Printf("Received device message: %s\n", string(buf[0:size]))
                 msg := make([]byte, size)
                 copy(msg, buf[0:size])
                 c.DeviceMessages <- msg
@@ -107,13 +110,14 @@ func (c *connection) out() {
             return
         case msg, ok := <-c.outMessages:
             if !ok {
+                fmt.Println("Error: not ok, returning.")
                 return
             }
 
-            //LOGGER.Debug("Sending msg %s", string(msg))
+            //fmt.Printf("Sending msg %s\n", string(msg))
             _, err := c.conn.Write(msg)
             if err != nil {
-                //LOGGER.Error("Error reading to UDP: %s", err.Error())
+                fmt.Printf("Error: Error writing to UDP: %s\n", err.Error())
             }
         }
     }
