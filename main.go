@@ -455,6 +455,35 @@ func onConnected(client mqtt.Client) {
 }
 
 func main() {
+    argv := os.Args
+    argc := len(argv)
+
+    if argc > 2 {
+        fmt.Println("Too many argument.")
+        os.Exit(1)
+    }
+
+    if argc == 2 {
+        switch argv[1] {
+        case "setup":
+            if err := setup(); err != nil {
+                fmt.Println(err.Error())
+                os.Exit(1)
+            }
+
+            os.Exit(0)
+        case "reset":
+            if err := reset(); err != nil {
+                fmt.Println(err.Error())
+                os.Exit(1)
+            }
+
+            os.Exit(0)
+        default:
+            fmt.Println("Unknown argument.")
+        }
+    }
+
     signalChannel := make(chan os.Signal, 1)
     signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
 
