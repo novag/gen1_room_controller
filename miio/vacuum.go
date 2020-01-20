@@ -48,28 +48,40 @@ const (
     VacStateInitiating
     // VacStateSleeping indicates that vacuum is in a sleep mode.
     VacStateSleeping
-    // VacStateWaiting indicates that vacuum is in waiting mode.
-    VacStateWaiting
+    // VacStateIdle indicates that vacuum is idle.
+    VacStateIdle
+    // VacStateRemoteControl indicates that vacuum is remotely controlled.
+    VacStateRemoteControl
     // VacStateCleaning indicates that vacuums is cleaning.
     VacStateCleaning
     // VacStateReturning indicates that vacuum is returning to the dock.
     VacStateReturning
+    // VacStateManualMode
+    VacStateManualMode
     // VacStateCharging indicates that vacuum is charging.
     VacStateCharging
+    // VacStateChargingError indicates that vacuum has charging issues.
+    VacStateChargingError
     // VacStatePaused indicates that cleaning is paused.
     VacStatePaused
     // VacStateSpot indicates that vacuum is cleaning a spot.
     VacStateSpot
+    // VacStateInError indicates that vacuum is in error state.
+    VacStateInError
     //VacStateShuttingDown indicates that vacuum is shutting down.
     VacStateShuttingDown
     // VacStateUpdating indicates that vacuum is in an update mode.
     VacStateUpdating
     // VacStateDocking indicates that vacuum is in a process of docking.
     VacStateDocking
-    // VacStateZone indicates that vacuum is cleaning az one.
-    VacStateZone
-    // VacStateFull indicates that dust bag is full.
-    VacStateFull
+    // VacStateGoTo indicates that vacuum is going to a target point.
+    VacStateGoTo
+    // VacStateZoneClean indicates that vacuum is cleaning a zone.
+    VacStateZoneClean
+    // VacStateRoomClean indicates that vacuum is cleaning a room.
+    VacStateRoomClean
+    // VacStateFullyCharged indicates that vacuum is fully charged.
+    VacStateFullyCharged
 )
 
 // VacuumState describes a vacuum state.
@@ -107,7 +119,7 @@ type stateResponse struct {
 // DeviceUpdateMessage contains data about an update.
 type DeviceUpdateMessage struct {
     ID    string
-    State interface{}
+    State *VacuumState
 }
 
 // Vacuum defines a Xiaomi vacuum cleaner.
@@ -196,30 +208,40 @@ func (v *Vacuum) UpdateState() {
     case 2:
         v.State.State = VacStateSleeping
     case 3:
-        v.State.State = VacStateWaiting
+        v.State.State = VacStateIdle
+    case 4:
+        v.State.State = VacStateRemoteControl
     case 5:
         v.State.State = VacStateCleaning
     case 6:
         v.State.State = VacStateReturning
+    case 7:
+        v.State.State = VacStateManualMode
     case 8:
         v.State.State = VacStateCharging
     case 9:
-        v.State.State = VacStateUnknown
+        v.State.State = VacStateChargingError
         v.State.Error = VacErrorCharge
     case 10:
         v.State.State = VacStatePaused
     case 11:
         v.State.State = VacStateSpot
+    case 12:
+        v.State.State = VacStateInError
     case 13:
         v.State.State = VacStateShuttingDown
     case 14:
         v.State.State = VacStateUpdating
     case 15:
         v.State.State = VacStateDocking
+    case 16:
+        v.State.State = VacStateGoTo
     case 17:
-        v.State.State = VacStateZone
+        v.State.State = VacStateZoneClean
+    case 18:
+        v.State.State = VacStateRoomClean
     case 100:
-        v.State.State = VacStateFull
+        v.State.State = VacStateFullyCharged
     default:
         v.State.State = VacStateUnknown
     }
