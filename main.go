@@ -26,18 +26,39 @@ const (
     sshKnownHostsPath = "/root/.ssh/known_hosts"
 )
 
-type Coordinates struct {
-    X int
-    Y int
+var subscriptions = map[string]MqttMsgHandler{
+    "devices/vacuum/1/save_map": saveMapMsgRcvd,
+    "devices/vacuum/1/clean": cleanMsgRcvd,
+    "devices/vacuum/1/goto_target": gotoTargetMsgRcvd,
+    "devices/vacuum/1/clean_room": cleanRoomMsgRcvd,
+
+    "devices/vacuum/1/ssh/pubkey": sshPubKeyMsgRcvd,
+    "devices/vacuum/1/ssh/tunnel": sshTunnelMsgRcvd,
 }
 
-type Zones [][]int
+type MqttMsgHandler func(client mqtt.Client, message mqtt.Message) (*string, error)
+
+type Coordinates []int
+
+type Room struct {
+    Zones       RoomZones   `json:"zones"`
+    IdlePoint   Coordinates `json:"idle_point"`
+}
+
+type RoomZones [][]int
+
+type StatusRespone struct {
+    Error   *string     `json:"error"`
+    Data    interface{} `json:"data"`
+}
 
 type RemoteHost struct {
     Address     string
     Port        string
     FetchKey    bool
 }
+
+var Vacuum *miio.Vacuum
 
 func getMiioToken() (string, error) {
     data, err := ioutil.ReadFile(miioTokenPath)
@@ -104,165 +125,146 @@ func gotoTarget(x int, y int) error {
         return err
     }
 
-    token, err := getMiioToken()
-    if err != nil {
-        return err
-    }
-    
-    vacuum, err := miio.NewVacuum("127.0.0.1", token)
-    if err != nil {
-        return err
-    }
-
-    vacuum.GotoTarget(x, y)
+    Vacuum.GotoTarget(x, y)
 
     fmt.Println("Going to the target point.")
 
     return nil
 }
 
-func zonedClean(zones Zones) error {
+func cleanRoom(zones RoomZones, idlePoint Coordinates) error {
     if err := restoreFullMap(); err != nil {
         return err
     }
 
-    token, err := getMiioToken()
-    if err != nil {
-        return err
-    }
-
-    vacuum, err := miio.NewVacuum("127.0.0.1", token)
-    if err != nil {
-        return err
-    }
-
-    vacuum.ZonedClean(zones)
+    Vacuum.ZonedClean(zones)
 
     fmt.Println("Starting zoned clean.")
 
     return nil
 }
 
-var saveMapMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+var saveMapMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     var source = rockroboBasePath
     var destination = roomControllerBasePath + string(message.Payload()) + "/"
 
     if err := copyMapData(source, destination); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-    } else {
-        client.Publish(message.Topic() + "/status", 0, false, "Success")
+        return nil, err
     }
+
+    return nil, nil
 }
 
-var cleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
-    token, err := getMiioToken()
-    if err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
-    }
-
-    fmt.Println(token)
-    
-    vacuum, err := miio.NewVacuum("127.0.0.1", token)
-    if err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
-    }
-
+var cleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     command := string(message.Payload())
     if command == "start" {
-        vacuum.StartCleaning()
+        Vacuum.StartCleaning()
     } else if command == "pause" {
-        vacuum.PauseCleaning()
+        Vacuum.PauseCleaning()
     } else {
-        vacuum.StopCleaningAndDock()
+        Vacuum.StopCleaningAndDock()
     }
 
-    fmt.Println("Okay did it!")
-
-    client.Publish(message.Topic() + "/status", 0, false, "Success")
+    return nil, nil
 }
 
-var gotoTargetMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+var gotoTargetMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     var coordinates Coordinates
 
     if err := json.Unmarshal(message.Payload(), &coordinates); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+        return nil, err
     }
 
-    if err := gotoTarget(coordinates.X, coordinates.Y); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+    if err := gotoTarget(coordinates[0], coordinates[1]); err != nil {
+        return nil, err
     }
 
-    client.Publish(message.Topic() + "/status", 0, false, "Success")
+    return nil, nil
 }
 
-var zonedCleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
-    var zones Zones
+var cleanRoomMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
+    var room Room
 
-    if err := json.Unmarshal(message.Payload(), &zones); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+    if err := json.Unmarshal(message.Payload(), &room); err != nil {
+        return nil, err
     }
 
-    if err := zonedClean(zones); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+    if err := cleanRoom(room.Zones, room.IdlePoint); err != nil {
+        return nil, err
     }
     
-    client.Publish(message.Topic() + "/status", 0, false, "Success")
+    return nil, nil
 }
 
-var sshPubKeyMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+var sshPubKeyMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     os.Remove(sshPrivateKeyPath)
     os.Remove(sshPublicKeyPath)
     cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", sshPrivateKeyPath, "-C", "vacuum_1", "-q", "-N", "")
     if err := cmd.Run(); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+        return nil, err
     }
 
     data, err := ioutil.ReadFile(sshPublicKeyPath)
     if err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+        return nil, err
     }
 
-    client.Publish(message.Topic() + "/status", 0, false, data)
+    str_data := string(data)
+
+    return &str_data, nil
 }
 
-var sshTunnelMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+var sshTunnelMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     var remoteHost RemoteHost
 
     if err := json.Unmarshal(message.Payload(), &remoteHost); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
-        return
+        return nil, err
     }
 
     if remoteHost.FetchKey {
         file, err := os.OpenFile(sshKnownHostsPath, os.O_CREATE|os.O_WRONLY, 0644)
         if err != nil {
-            client.Publish(message.Topic() + "/status", 0, false, err.Error())
-            return
+            return nil, err
         }
         defer file.Close()
 
         cmd := exec.Command("ssh-keyscan", "-H", "-p", remoteHost.Port, remoteHost.Address)
         cmd.Stdout = file
         if err := cmd.Run(); err != nil {
-            client.Publish(message.Topic() + "/status", 0, false, err.Error())
-            return
+            return nil, err
         }
     }
 
     cmd := exec.Command("ssh", "-f", "-N", "-T", "-R52222:localhost:22", mqttUsername + "@" + remoteHost.Address, "-p", remoteHost.Port)
     if err := cmd.Run(); err != nil {
-        client.Publish(message.Topic() + "/status", 0, false, err.Error())
+        return nil, err
     }
 
-    client.Publish(message.Topic() + "/status", 0, false, "Success")
+    return nil, nil
+}
+
+var mqttMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
+    var str_error *string
+
+    fmt.Println("MQTT message received!")
+
+    data, err := subscriptions[message.Topic()](client, message)
+    if err != nil {
+        tmp := err.Error(); str_error = &tmp
+    }
+
+    statusResponse := StatusRespone{
+        Error: str_error,
+        Data: data,
+    }
+
+    jdata, err := json.Marshal(statusResponse)
+    if err != nil {
+        client.Publish(message.Topic() + "/status", 0, false, `{"error":"` + err.Error() + `","data":null}`)
+        return
+    }
+
+    client.Publish(message.Topic() + "/status", 0, false, string(jdata))
 }
 
 func main() {
@@ -278,29 +280,25 @@ func main() {
         panic(token.Error())
     }
 
-    if token := client.Subscribe("devices/vacuum/1/save_map", 0, saveMapMsgRcvd); token.Wait() && token.Error() != nil {
-        fmt.Println(token.Error())
+    token, err := getMiioToken()
+    if err != nil {
+        fmt.Println("Error: " + err.Error())
+        return
     }
 
-    if token := client.Subscribe("devices/vacuum/1/clean", 0, cleanMsgRcvd); token.Wait() && token.Error() != nil {
-        fmt.Println(token.Error())
+    Vacuum, err = miio.NewVacuum("127.0.0.1", token)
+    if err != nil {
+        fmt.Println("Error: " + err.Error())
+        return
     }
 
-    if token := client.Subscribe("devices/vacuum/1/goto_target", 0, gotoTargetMsgRcvd); token.Wait() && token.Error() != nil {
-        fmt.Println(token.Error())
-    }
-
-    if token := client.Subscribe("devices/vacuum/1/zoned_clean", 0, zonedCleanMsgRcvd); token.Wait() && token.Error() != nil {
-        fmt.Println(token.Error())
-    }
-
-    if token := client.Subscribe("devices/vacuum/1/ssh/pubkey", 0, sshPubKeyMsgRcvd); token.Wait() && token.Error() != nil {
-        fmt.Println(token.Error())
-    }
-
-    if token := client.Subscribe("devices/vacuum/1/ssh/tunnel", 0, sshTunnelMsgRcvd); token.Wait() && token.Error() != nil {
-        fmt.Println(token.Error())
+    for topic := range subscriptions {
+        if token := client.Subscribe(topic, 0, mqttMsgRcvd); token.Wait() && token.Error() != nil {
+            fmt.Println(token.Error())
+        }
     }
 
     <- signalChannel
+
+    fmt.Println("Goodbye!")
 }
