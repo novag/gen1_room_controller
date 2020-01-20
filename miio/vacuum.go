@@ -247,7 +247,10 @@ func (v *Vacuum) UpdateState() {
         v.State.State = VacStateUnknown
     }
 
-    v.UpdateChan <- v.GetUpdateMessage()
+    select {
+        case v.UpdateChan <- v.GetUpdateMessage():
+        default:
+    }
 }
 
 // UpdateStatus requests for a state update.
