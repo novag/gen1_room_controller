@@ -17,6 +17,7 @@ const (
     cmdDock         = "app_charge"
     cmdFindMe       = "find_me"
     cmdFanPower     = "set_custom_mode"
+    cmdChangeVolume = "change_sound_volume"
 )
 
 const (
@@ -324,6 +325,16 @@ func (v *Vacuum) StopCleaningAndDock() bool {
     return v.UpdateStatus()
 }
 
+// Dock returns to dock.
+func (v *Vacuum) Dock() bool {
+    if !v.sendCommand(cmdDock, nil, false, vacRetries) {
+        return false
+    }
+
+    time.Sleep(1 * time.Second)
+    return v.UpdateStatus()
+}
+
 // FindMe sends the find me command.
 func (v *Vacuum) FindMe() bool {
     if !v.sendCommand(cmdFindMe, nil, false, vacRetries) {
@@ -340,6 +351,18 @@ func (v *Vacuum) SetFanPower(val uint8) bool {
         val = 100
     }
     if !v.sendCommand(cmdFanPower, []interface{}{val}, false, vacRetries) {
+        return false
+    }
+
+    return v.UpdateStatus()
+}
+
+// SetVolume sets the sound volume
+func (v *Vacuum) SetVolume(val uint8) bool {
+    if val > 100 {
+        val = 100
+    }
+    if !v.sendCommand(cmdChangeVolume, []interface{}{val}, false, vacRetries) {
         return false
     }
 
