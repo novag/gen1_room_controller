@@ -107,6 +107,18 @@ func checkDocked() error {
     return errors.New("Vacuum not docked! - State: " + strconv.Itoa(int(state)))
 }
 
+func checkAvailable() error {
+    state := Vacuum.GetUpdateMessage().State.State
+
+    if state == miio.VacStateCharging || state == miio.VacStateFullyCharged ||
+            state == miio.VacStateIdle || state == miio.VacStateSleeping ||
+            state == miio.VacStatePaused {
+        return nil;
+    }
+
+    return errors.New("Vacuum busy! - State: " + strconv.Itoa(int(state)))
+}
+
 func copyMapData(source string, destination string) (bool, error) {
     fileFilter := []string{"last_map", "ChargerPos.data", "StartPos.data"}
 
@@ -286,6 +298,10 @@ func cleanRoom(zones RoomZones, idlePoint Coordinates) error {
 }
 
 var saveMapMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
+    if err := checkDocked(); err != nil {
+        return nil, err
+    }
+
     var source = rockroboBasePath
     var destination = roomControllerBasePath + string(message.Payload()) + "/"
 
@@ -297,6 +313,10 @@ var saveMapMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, er
 }
 
 var cleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
+    if err := checkAvailable(); err != nil {
+        return nil, err
+    }
+
     command := string(message.Payload())
     if command == "start" {
         Vacuum.StartCleaning()
@@ -312,6 +332,10 @@ var cleanMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, erro
 var gotoTargetMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     var coordinates Coordinates
 
+    if err := checkAvailable(); err != nil {
+        return nil, err
+    }
+
     if err := json.Unmarshal(message.Payload(), &coordinates); err != nil {
         return nil, err
     }
@@ -325,6 +349,10 @@ var gotoTargetMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string,
 
 var cleanRoomMsgRcvd = func(client mqtt.Client, message mqtt.Message) (*string, error) {
     var room Room
+
+    if err := checkDocked(); err != nil {
+        return nil, err
+    }
 
     if err := json.Unmarshal(message.Payload(), &room); err != nil {
         return nil, err
