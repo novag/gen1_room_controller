@@ -1,8 +1,6 @@
 package main
 
 import (
-    "crypto/md5"
-    "encoding/hex"
     "encoding/json"
     "errors"
     "fmt"
@@ -29,17 +27,18 @@ const (
     sshPublicKeyPath = "/root/.ssh/id_ed25519.pub"
     sshKnownHostsPath = "/root/.ssh/known_hosts"
 
-    statusUpdateTopic = "devices/vacuum/1/status"
+    statusUpdateTopic = "devices/vacuum/%s/status"
+    pingTopic = "devices/vacuum/%s/ping"
 )
 
 var subscriptions = map[string]MqttMsgHandler{
-    "devices/vacuum/1/save_map": saveMapMsgRcvd,
-    "devices/vacuum/1/clean": cleanMsgRcvd,
-    "devices/vacuum/1/goto_target": gotoTargetMsgRcvd,
-    "devices/vacuum/1/clean_room": cleanRoomMsgRcvd,
+    "devices/vacuum/%s/save_map": saveMapMsgRcvd,
+    "devices/vacuum/%s/clean": cleanMsgRcvd,
+    "devices/vacuum/%s/goto_target": gotoTargetMsgRcvd,
+    "devices/vacuum/%s/clean_room": cleanRoomMsgRcvd,
 
-    "devices/vacuum/1/ssh/pubkey": sshPubKeyMsgRcvd,
-    "devices/vacuum/1/ssh/tunnel": sshTunnelMsgRcvd,
+    "devices/vacuum/%s/ssh/pubkey": sshPubKeyMsgRcvd,
+    "devices/vacuum/%s/ssh/tunnel": sshTunnelMsgRcvd,
 }
 
 type MqttMsgHandler func(client mqtt.Client, message mqtt.Message) (*string, error)
@@ -66,36 +65,6 @@ type RemoteHost struct {
 
 var copyMapMutex sync.Mutex
 var Vacuum *miio.Vacuum
-
-func getMiioToken() (string, error) {
-    data, err := ioutil.ReadFile(miioTokenPath)
-    if err != nil {
-        return "", err
-    }
-
-    data = data[:16]
-
-    return hex.EncodeToString(data), nil
-}
-
-func md5sum(filepath string) (string, error) {
-    var hash string
-
-    file, err := os.Open(filepath)
-    if err != nil {
-        return hash, err
-    }
-    defer file.Close()
-
-    h := md5.New()
-    if _, err := io.Copy(h, file); err != nil {
-        return hash, err
-    }
-
-    hash = hex.EncodeToString(h.Sum(nil))
-
-    return hash, nil
-}
 
 func checkDocked() error {
     state := Vacuum.GetUpdateMessage().State.State
@@ -131,12 +100,12 @@ func copyMapData(source string, destination string) (bool, error) {
     }
 
     for index, file := range fileFilter {
-        sourceHash, err := md5sum(source + file)
+        sourceHash, err := FileChecksum(source + file)
         if err != nil {
             break
         }
 
-        destinationHash, err := md5sum(destination + file)
+        destinationHash, err := FileChecksum(destination + file)
         if err != nil {
             break
         }
@@ -448,12 +417,15 @@ var pingMsgRcvd = func(client mqtt.Client, message mqtt.Message) {
 func statusUpdateLoop(client mqtt.Client) {
     state := miio.VacStateUnknown
 
+    identifier, _ := GetIdentifier()
+    topic := fmt.Sprintf(statusUpdateTopic, identifier)
+
     for {
         Vacuum.UpdateStatus()
         updateMessage := Vacuum.GetUpdateMessage()
 
         if state != updateMessage.State.State {
-            client.Publish(statusUpdateTopic, 0, false, strconv.Itoa(int(state)))
+            client.Publish(topic, 0, false, strconv.Itoa(int(state)))
 
             if state != miio.VacStateCharging && state != miio.VacStateFullyCharged &&
                     updateMessage.State.State == miio.VacStateCharging {
@@ -471,11 +443,16 @@ func statusUpdateLoop(client mqtt.Client) {
 }
 
 func onConnected(client mqtt.Client) {
-    if token := client.Subscribe("devices/vacuum/1/ping", 0, pingMsgRcvd); token.Wait() && token.Error() != nil {
+    identifier, _ := GetIdentifier()
+
+    topic := fmt.Sprintf(pingTopic, identifier)
+    if token := client.Subscribe(topic, 0, pingMsgRcvd); token.Wait() && token.Error() != nil {
         fmt.Println(token.Error())
     }
 
     for topic := range subscriptions {
+        topic = fmt.Sprintf(topic, identifier)
+
         if token := client.Subscribe(topic, 0, mqttMsgRcvd); token.Wait() && token.Error() != nil {
             fmt.Println(token.Error())
         }
@@ -523,7 +500,7 @@ func main() {
     opts.SetOnConnectHandler(onConnected)
 
     opts.AddBroker(mqttServer)
-    opts.SetClientID(mqttClientId)
+    opts.SetClientID(GetClientId(mqttClientIdPrefix))
     opts.SetUsername(mqttUsername)
     opts.SetPassword(mqttPassword)
 
@@ -532,7 +509,7 @@ func main() {
         panic(token.Error())
     }
 
-    token, err := getMiioToken()
+    token, err := GetMiioToken()
     if err != nil {
         fmt.Println("Error: " + err.Error())
         return
